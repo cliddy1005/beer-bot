@@ -6,8 +6,8 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 import qrcode from 'qrcode-terminal'
 import pino from 'pino'
-import { parseBet } from './betParser.js'
-import { addBet, resolveBet, getTally } from './sheets.js'
+import { parseBet, classifyIntent } from './betParser.js'
+import { addBet, resolveBet, getTally, getOpenBets } from './sheets.js'
 
 const GROUP_JID = process.env.GOLF_GROUP_JID || null
 
@@ -95,31 +95,45 @@ async function handleCommand({ sock, chatJid, senderJid, senderName, text }) {
   // strip the @mention tokens (digits) out of the message before parsing
   const clean = text.replace(/@\d+/g, '').trim()
 
-  if (/^tally\b/i.test(clean)) {
+  const openBets = await getOpenBets()
+  const intent = await classifyIntent(clean, openBets)
+
+  if (intent === 'tally') {
     const tally = await getTally()
     await sock.sendMessage(chatJid, { text: tally })
     return
   }
 
-  if (/^(resolve|won|lost|broke|beat)\b/i.test(clean)) {
+  if (intent === 'resolve') {
     const result = await resolveBet(clean, senderName)
     await sock.sendMessage(chatJid, { text: result })
     return
   }
 
-  const bet = await parseBet(clean, senderName)
-  if (!bet) {
+  if (intent === 'bet') {
+    const bet = await parseBet(clean, senderName)
+    if (!bet) {
+      await sock.sendMessage(chatJid, {
+        text:
+          "Couldn't parse that as a bet. Try something like:\n" +
+          '"@BeerBot Dave owes me a beer if he doesn\'t break 90"'
+      })
+      return
+    }
+
+    await addBet(bet)
     await sock.sendMessage(chatJid, {
-      text:
-        "Couldn't parse that as a bet. Try something like:\n" +
-        '"@BeerBot Dave owes me a beer if he doesn\'t break 90"'
+      text: `Logged 🍺 ${bet.bettor} vs ${bet.opponent} — ${bet.condition} (stake: ${bet.stake})\nBet ID: ${bet.id}`
     })
     return
   }
 
-  await addBet(bet)
   await sock.sendMessage(chatJid, {
-    text: `Logged 🍺 ${bet.bettor} vs ${bet.opponent} — ${bet.condition} (stake: ${bet.stake})\nBet ID: ${bet.id}`
+    text:
+      "Not sure what to do with that. Try:\n" +
+      '"@BeerBot Dave owes me a beer if he doesn\'t break 90" (new bet)\n' +
+      '"@BeerBot Dave broke 90, I win" (resolve a bet)\n' +
+      '"@BeerBot tally" (check the score)'
   })
 }
 

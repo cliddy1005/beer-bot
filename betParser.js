@@ -15,6 +15,40 @@ Respond ONLY with raw JSON, no markdown fences, no commentary, matching exactly 
 If the message clearly isn't a bet (e.g. it's a question, a resolve/tally command, or just chat),
 respond with exactly: {"error": "not a bet"}`
 
+export async function classifyIntent(text, openBets) {
+  const system = `You are the message router for a golf beer-bet WhatsApp bot. Given a message
+and the list of currently open bets (JSON), classify the message's intent as exactly one of:
+
+- "tally": asking for the running beer tally / leaderboard
+- "resolve": reporting a result, score, or outcome relevant to one of the open bets - this
+  includes explicit resolutions ("Dave broke 90, I win") AND raw updates like final scores
+  that let you work out who won an open bet even if the message doesn't say so directly
+  (e.g. "Ciaran scored 14 points on the par 5s, Storm scored 12")
+- "bet": proposing a brand new bet, unrelated to any open bet
+- "other": anything else (chit-chat, a question, too ambiguous to act on)
+
+If there are no open bets, "resolve" is never correct - prefer "bet" or "other".
+Respond ONLY with raw JSON, no markdown fences: {"intent": "tally" | "resolve" | "bet" | "other"}
+
+Open bets: ${JSON.stringify(openBets)}`
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 50,
+    system,
+    messages: [{ role: 'user', content: text }]
+  })
+
+  const raw = response.content.find((b) => b.type === 'text')?.text?.trim()
+  try {
+    const parsed = JSON.parse(raw)
+    if (['tally', 'resolve', 'bet', 'other'].includes(parsed.intent)) return parsed.intent
+  } catch {
+    // fall through
+  }
+  return 'other'
+}
+
 export async function parseBet(text, senderName) {
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
