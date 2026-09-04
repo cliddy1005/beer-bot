@@ -6,8 +6,8 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 import qrcode from 'qrcode-terminal'
 import pino from 'pino'
-import { parseBet, classifyIntent } from './betParser.js'
-import { addBet, resolveBet, getTally, getOpenBets } from './sheets.js'
+import { parseBet, classifyIntent, answerQuestion } from './betParser.js'
+import { addBet, resolveBet, getTally, getOpenBets, getAllBets } from './sheets.js'
 
 const GROUP_JID = process.env.GOLF_GROUP_JID || null
 
@@ -32,8 +32,8 @@ async function start() {
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut
-      console.log('Connection closed.', shouldReconnect ? 'Reconnecting...' : 'Logged out - delete the auth/ folder and rescan.')
-      if (shouldReconnect) start()
+      console.log('Connection closed.', shouldReconnect ? 'Reconnecting in 3s...' : 'Logged out - delete the auth/ folder and rescan.')
+      if (shouldReconnect) setTimeout(start, 3000)
     } else if (connection === 'open') {
       console.log('BeerBot is connected. Bot JID:', sock.user.id)
       if (!GROUP_JID) {
@@ -73,13 +73,15 @@ async function handleMessage(sock, msg) {
   const mentions = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || []
   const botNumber = sock.user.id.split(':')[0]
   const botLid = sock.authState.creds.me?.lid?.split(':')[0]
-  const mentioned = mentions.some((jid) => jid.startsWith(botNumber) || (botLid && jid.startsWith(botLid)))
+  const isBotMention = (jid) => jid.startsWith(botNumber) || (botLid && jid.startsWith(botLid))
+  const mentioned = mentions.some(isBotMention)
   if (!mentioned) return
 
+  const otherMentions = mentions.filter((jid) => !isBotMention(jid))
   const senderJid = msg.key.participant || msg.key.remoteJid
   const senderName = msg.pushName || senderJid
 
-  await handleCommand({ sock, chatJid, senderJid, senderName, text })
+  await handleCommand({ sock, chatJid, senderJid, senderName, text, otherMentions })
 }
 
 function extractText(msg) {
@@ -91,7 +93,7 @@ function extractText(msg) {
   )
 }
 
-async function handleCommand({ sock, chatJid, senderJid, senderName, text }) {
+async function handleCommand({ sock, chatJid, senderJid, senderName, text, otherMentions }) {
   // strip the @mention tokens (digits) out of the message before parsing
   const clean = text.replace(/@\d+/g, '').trim()
 
@@ -110,7 +112,21 @@ async function handleCommand({ sock, chatJid, senderJid, senderName, text }) {
     return
   }
 
+  if (intent === 'question') {
+    const allBets = await getAllBets()
+    const answer = await answerQuestion(clean, allBets)
+    await sock.sendMessage(chatJid, { text: answer })
+    return
+  }
+
   if (intent === 'bet') {
+    if (otherMentions.length === 0) {
+      await sock.sendMessage(chatJid, {
+        text: "Tag who you're betting against to log this one - e.g. \"@BeerBot @Dave owes me a beer if he doesn't break 90\""
+      })
+      return
+    }
+
     const bet = await parseBet(clean, senderName)
     if (!bet) {
       await sock.sendMessage(chatJid, {
@@ -121,9 +137,9 @@ async function handleCommand({ sock, chatJid, senderJid, senderName, text }) {
       return
     }
 
-    await addBet(bet)
+    const id = await addBet(bet)
     await sock.sendMessage(chatJid, {
-      text: `Logged 🍺 ${bet.bettor} vs ${bet.opponent} — ${bet.condition} (stake: ${bet.stake})\nBet ID: ${bet.id}`
+      text: `Logged 🍺 ${bet.bettor} vs ${bet.opponent} — ${bet.condition} (stake: ${bet.stake})\nBet ID: ${id}`
     })
     return
   }
@@ -133,8 +149,14 @@ async function handleCommand({ sock, chatJid, senderJid, senderName, text }) {
       "Not sure what to do with that. Try:\n" +
       '"@BeerBot Dave owes me a beer if he doesn\'t break 90" (new bet)\n' +
       '"@BeerBot Dave broke 90, I win" (resolve a bet)\n' +
-      '"@BeerBot tally" (check the score)'
+      '"@BeerBot tally" (check the score)\n' +
+      '"@BeerBot what\'s left to decide?" (ask a question)'
   })
 }
+
+process.on('unhandledRejection', (err) => {
+  console.error('Unhandled rejection - reconnecting in 3s:', err)
+  setTimeout(start, 3000)
+})
 
 start()

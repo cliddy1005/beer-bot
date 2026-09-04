@@ -64,8 +64,11 @@ Copy that into `.env` as `GOLF_GROUP_JID`, then restart (`npm start`).
 In the group, tag the bot's contact name and describe the bet:
 
 ```
-@BeerBot Dave owes me a beer if he doesn't break 90 today
+@BeerBot @Dave owes me a beer if he doesn't break 90 today
 ```
+
+You must tag the person you're betting against (in addition to tagging BeerBot) - bets
+without an opponent tag are rejected, so there's no ambiguity about who's on the hook.
 
 Resolve it later:
 

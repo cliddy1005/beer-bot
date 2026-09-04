@@ -19,16 +19,21 @@ export async function classifyIntent(text, openBets) {
   const system = `You are the message router for a golf beer-bet WhatsApp bot. Given a message
 and the list of currently open bets (JSON), classify the message's intent as exactly one of:
 
-- "tally": asking for the running beer tally / leaderboard
+- "tally": asking for beer fine totals - the running count of beers each player currently owes
+  (can be negative, meaning they're in credit) - e.g. "tally", "how many beers does Dave owe",
+  "what are the totals", "how's everyone doing"
 - "resolve": reporting a result, score, or outcome relevant to one of the open bets - this
   includes explicit resolutions ("Dave broke 90, I win") AND raw updates like final scores
   that let you work out who won an open bet even if the message doesn't say so directly
   (e.g. "Ciaran scored 14 points on the par 5s, Storm scored 12")
 - "bet": proposing a brand new bet, unrelated to any open bet
-- "other": anything else (chit-chat, a question, too ambiguous to act on)
+- "question": asking about the bets themselves (not totals, not reporting a result) - e.g.
+  "summarize the bets", "what's left to decide", "what's Dave got on", "any bets outstanding?"
+- "other": anything else (chit-chat, too ambiguous to act on)
 
-If there are no open bets, "resolve" is never correct - prefer "bet" or "other".
-Respond ONLY with raw JSON, no markdown fences: {"intent": "tally" | "resolve" | "bet" | "other"}
+If there are no open bets, "resolve" is never correct - prefer "bet", "question", or "other".
+Respond ONLY with raw JSON, no markdown fences:
+{"intent": "tally" | "resolve" | "bet" | "question" | "other"}
 
 Open bets: ${JSON.stringify(openBets)}`
 
@@ -42,11 +47,30 @@ Open bets: ${JSON.stringify(openBets)}`
   const raw = response.content.find((b) => b.type === 'text')?.text?.trim()
   try {
     const parsed = JSON.parse(raw)
-    if (['tally', 'resolve', 'bet', 'other'].includes(parsed.intent)) return parsed.intent
+    if (['tally', 'resolve', 'bet', 'question', 'other'].includes(parsed.intent)) return parsed.intent
   } catch {
     // fall through
   }
   return 'other'
+}
+
+export async function answerQuestion(text, allBets) {
+  const system = `You are BeerBot, a WhatsApp bot that tracks golf beer bets for a group chat.
+Answer the user's question about the bets below, in plain WhatsApp-friendly text (no markdown
+headers or tables - short lines and emoji are fine). Be concise. Use bet IDs when referring to
+specific bets so people can resolve/reference them later. If the answer would be empty (e.g. no
+open bets), say so plainly.
+
+All bets (JSON, status is "open" or "resolved"): ${JSON.stringify(allBets)}`
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 500,
+    system,
+    messages: [{ role: 'user', content: text }]
+  })
+
+  return response.content.find((b) => b.type === 'text')?.text?.trim() || "Couldn't work that out - try rephrasing."
 }
 
 export async function parseBet(text, senderName) {
@@ -72,7 +96,6 @@ export async function parseBet(text, senderName) {
   if (parsed.error) return null
 
   return {
-    id: Date.now().toString(36),
     status: 'open',
     createdBy: senderName,
     bettor: parsed.bettor,
