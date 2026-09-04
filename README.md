@@ -82,6 +82,27 @@ Check the running total any time:
 @BeerBot tally
 ```
 
+Or ask it things:
+
+```
+@BeerBot what's left to decide?
+```
+
+## Dashboard
+
+While `npm start` is running, open [http://localhost:3000](http://localhost:3000) (or
+whatever `DASHBOARD_PORT` is set to) for a live-updating view of open bets, resolved bets,
+and everyone's current totals - refreshes automatically every 5 seconds. Only reachable on
+the machine (or local network) running the bot.
+
+## Starting balances
+
+If players had existing beer fines before BeerBot started tracking things, add them to the
+`StartingBalances` tab (columns: `Player`, `Offset`) - the bot adds each player's offset on
+top of whatever it computes from resolved bets, everywhere (chat `tally`, the `Totals` tab,
+and the dashboard). Editing `StartingBalances` is safe at any time; editing `Totals` directly
+is not - it gets overwritten whenever a bet resolves.
+
 ## Troubleshooting
 
 - **Tagging the bot does nothing, no console output at all**: make sure `npm start`

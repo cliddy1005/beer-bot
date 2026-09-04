@@ -8,8 +8,10 @@ import qrcode from 'qrcode-terminal'
 import pino from 'pino'
 import { parseBet, classifyIntent, answerQuestion } from './betParser.js'
 import { addBet, resolveBet, getTally, getOpenBets, getAllBets } from './sheets.js'
+import { startDashboard } from './dashboard.js'
 
 const GROUP_JID = process.env.GOLF_GROUP_JID || null
+const DASHBOARD_PORT = process.env.DASHBOARD_PORT || 3000
 
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState('auth')
@@ -159,4 +161,5 @@ process.on('unhandledRejection', (err) => {
   setTimeout(start, 3000)
 })
 
+startDashboard(DASHBOARD_PORT)
 start()

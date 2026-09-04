@@ -143,9 +143,9 @@ function parseBeerCount(stake) {
   return match ? parseInt(match[0], 10) : 1
 }
 
-function computeTally(rows) {
+function computeTally(rows, offsets = {}) {
   const resolved = rows.slice(1).filter((r) => r[5] === 'resolved' && r[7])
-  const tally = {}
+  const tally = { ...offsets }
   for (const r of resolved) {
     const bettor = r[1]
     const opponent = r[2]
@@ -159,9 +159,19 @@ function computeTally(rows) {
   return tally
 }
 
+export async function getTallyData() {
+  const rows = await getAllRows()
+  const offsets = await getStartingBalances()
+  const tally = computeTally(rows, offsets)
+  return Object.entries(tally)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }))
+}
+
 export async function getTally() {
   const rows = await getAllRows()
-  const tally = computeTally(rows)
+  const offsets = await getStartingBalances()
+  const tally = computeTally(rows, offsets)
   if (Object.keys(tally).length === 0) return 'No resolved bets yet.'
 
   const lines = Object.entries(tally)
@@ -172,16 +182,34 @@ export async function getTally() {
 }
 
 const TOTALS_SHEET_NAME = 'Totals'
+const STARTING_BALANCES_SHEET_NAME = 'StartingBalances'
 
-async function ensureTotalsSheet(sheets) {
+async function ensureSheetExists(sheets, name) {
   const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID })
-  const exists = meta.data.sheets.some((s) => s.properties.title === TOTALS_SHEET_NAME)
+  const exists = meta.data.sheets.some((s) => s.properties.title === name)
   if (!exists) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId: SHEET_ID,
-      requestBody: { requests: [{ addSheet: { properties: { title: TOTALS_SHEET_NAME } } }] }
+      requestBody: { requests: [{ addSheet: { properties: { title: name } } }] }
     })
   }
+}
+
+export async function getStartingBalances() {
+  const sheets = await getSheetsClient()
+  await ensureSheetExists(sheets, STARTING_BALANCES_SHEET_NAME)
+
+  const res = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `${STARTING_BALANCES_SHEET_NAME}!A:B`
+  })
+  const rows = res.data.values || []
+
+  const offsets = {}
+  for (const [name, offset] of rows.slice(1)) {
+    if (name) offsets[name] = Number(offset) || 0
+  }
+  return offsets
 }
 
 async function getTotalsRows(sheets) {
@@ -194,10 +222,11 @@ async function getTotalsRows(sheets) {
 
 export async function updateTotalsForPlayers(names) {
   const rows = await getAllRows()
-  const tally = computeTally(rows)
+  const offsets = await getStartingBalances()
+  const tally = computeTally(rows, offsets)
 
   const sheets = await getSheetsClient()
-  await ensureTotalsSheet(sheets)
+  await ensureSheetExists(sheets, TOTALS_SHEET_NAME)
 
   let totalsRows = await getTotalsRows(sheets)
   if (totalsRows.length === 0) {
