@@ -103,6 +103,17 @@ top of whatever it computes from resolved bets, everywhere (chat `tally`, the `T
 and the dashboard). Editing `StartingBalances` is safe at any time; editing `Totals` directly
 is not - it gets overwritten whenever a bet resolves.
 
+## Trip context
+
+Give the bot background on this specific trip - dates, courses, who's on it, accommodation,
+schedule - by writing it as plain text in a file and pointing `TRIP_CONTEXT_PATH` at it (see
+`trip-context.example.md` for the shape; there's no fixed format). It's injected into bet
+parsing, resolving, and question-answering, so `@BeerBot what time do we tee off tomorrow?`
+works the same way as bet questions do. Leave `TRIP_CONTEXT_PATH` blank to skip this.
+
+Keep the actual file out of git (it's already gitignored by default as `trip-context.md`) -
+it'll usually contain real names, dates, and travel details you don't want in a public repo.
+
 ## Troubleshooting
 
 - **Tagging the bot does nothing, no console output at all**: make sure `npm start`

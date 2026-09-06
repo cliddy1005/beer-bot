@@ -66,6 +66,42 @@ export async function getOpenBets() {
     .map((r) => ({ id: r[0], bettor: r[1], opponent: r[2], condition: r[3], stake: r[4] }))
 }
 
+const RESOLUTION_RULES = `Rules for deciding the winner:
+- The "bettor" staked that the "condition" would happen. If the message confirms the condition
+  happened, "bettor" wins. If the message shows it did NOT happen (including the opposite outcome),
+  "opponent" wins.
+- Reason carefully about whether the message actually satisfies the exact condition text - don't
+  assume, check it. Golf scoring reminder: birdie = 1 under par, par = even, bogey = 1 over par,
+  double bogey = 2 over par. These are different outcomes, not synonyms - a birdie is not a bogey.
+- If the message doesn't clearly tell you the outcome, or you're not confident, don't guess.`
+
+async function applyResolution(rowIndex, row, winnerRole) {
+  const winner = winnerRole === 'bettor' ? row[1] : row[2]
+  const loser = winnerRole === 'bettor' ? row[2] : row[1]
+
+  const sheets = await getSheetsClient()
+  const rowNum = rowIndex + 1 // 1-indexed, matches sheet row numbers
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET_NAME}!F${rowNum}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [['resolved']] }
+  })
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `${SHEET_NAME}!H${rowNum}:I${rowNum}`,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [[winner, new Date().toISOString()]] }
+  })
+
+  await updateTotalsForPlayers([winner, loser])
+
+  const beers = parseBeerCount(row[4])
+  return `Resolved bet ${row[0]}: ${winner} wins! 🍺 ${loser} +${beers} to their fine count, ${winner} -${beers}.`
+}
+
 export async function resolveBet(text, senderName) {
   const openBets = await getOpenBets()
   if (openBets.length === 0) return 'No open bets to resolve.'
@@ -73,14 +109,7 @@ export async function resolveBet(text, senderName) {
   const system = `Given a list of open golf bets (JSON) and a message with new information, figure out
 which open bet this is about and whether its "condition" happened.
 
-Rules for deciding the winner:
-- The "bettor" staked that the "condition" would happen. If the message confirms the condition
-  happened, "bettor" wins. If the message shows it did NOT happen (including the opposite outcome),
-  "opponent" wins.
-- Reason carefully about whether the message actually satisfies the exact condition text - don't
-  assume, check it. Golf scoring reminder: birdie = 1 under par, par = even, bogey = 1 over par,
-  double bogey = 2 over par. These are different outcomes, not synonyms - a birdie is not a bogey.
-- If the message doesn't clearly resolve any open bet, or you're not confident, don't guess.
+${RESOLUTION_RULES}
 
 Respond ONLY with raw JSON, no markdown fences. First explain your reasoning in one short sentence,
 then give the verdict:
@@ -111,31 +140,50 @@ Open bets: ${JSON.stringify(openBets)}`
   const rowIndex = rows.findIndex((r) => r[0] === parsed.id)
   if (rowIndex === -1) return "Couldn't find that bet in the sheet."
 
+  return applyResolution(rowIndex, rows[rowIndex], parsed.winnerRole)
+}
+
+export async function resolveBetById(betId, text, senderName) {
+  const rows = await getAllRows()
+  const rowIndex = rows.findIndex((r) => r[0] === betId)
+  if (rowIndex === -1) return null // not a bet we recognize - let the caller fall back
+
   const row = rows[rowIndex]
-  const winner = parsed.winnerRole === 'bettor' ? row[1] : row[2]
-  const loser = parsed.winnerRole === 'bettor' ? row[2] : row[1]
+  if (row[5] !== 'open') return `Bet ${betId} is already ${row[5]}.`
 
-  const sheets = await getSheetsClient()
-  const rowNum = rowIndex + 1 // 1-indexed, matches sheet row numbers
+  const bet = { id: row[0], bettor: row[1], opponent: row[2], condition: row[3], stake: row[4] }
 
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!F${rowNum}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [['resolved']] }
+  const system = `Given one golf bet (JSON) and a message with new information, decide whether its
+"condition" happened.
+
+${RESOLUTION_RULES}
+
+Respond ONLY with raw JSON, no markdown fences. First explain your reasoning in one short sentence,
+then give the verdict:
+{"reasoning": string, "conditionMet": boolean, "winnerRole": "bettor" | "opponent"}
+or, if the message doesn't tell you the outcome, {"error": "unclear"}
+
+Bet: ${JSON.stringify(bet)}`
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 300,
+    system,
+    messages: [{ role: 'user', content: `Message sender: ${senderName}\nMessage: ${text}` }]
   })
 
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: SHEET_ID,
-    range: `${SHEET_NAME}!H${rowNum}:I${rowNum}`,
-    valueInputOption: 'USER_ENTERED',
-    requestBody: { values: [[winner, new Date().toISOString()]] }
-  })
+  const raw = response.content.find((b) => b.type === 'text')?.text?.trim()
+  let parsed
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return `Couldn't tell who won bet ${betId} from that - try describing the outcome more clearly.`
+  }
+  if (parsed.error || !['bettor', 'opponent'].includes(parsed.winnerRole)) {
+    return `Couldn't tell who won bet ${betId} from that - try describing the outcome more clearly.`
+  }
 
-  await updateTotalsForPlayers([winner, loser])
-
-  const beers = parseBeerCount(row[4])
-  return `Resolved bet ${parsed.id}: ${winner} wins! 🍺 ${loser} +${beers} to their fine count, ${winner} -${beers}.`
+  return applyResolution(rowIndex, row, parsed.winnerRole)
 }
 
 function parseBeerCount(stake) {

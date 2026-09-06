@@ -2,3 +2,4 @@ node_modules/
 auth/
 .env
 service-account.json
+trip-context.md
